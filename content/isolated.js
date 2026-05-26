@@ -139,13 +139,13 @@
       'videoId=' + data.videoId, data.debug);
 
     if (!data.bestTrack || !data.tracks || data.tracks.length === 0) {
-      // Fallback: try constructing timedtext URL directly
-      // Use videoId from MAIN world, or extract from current URL
+      // No caption tracks found — try direct timedtext with videoId
       const vid = data.videoId || getVideoId();
       if (vid) {
-        console.log('[TypeStream] Fallback: direct timedtext fetch for', vid);
-        const directUrl = 'https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en';
-        await fetchVTT(directUrl);
+        console.log('[TypeStream] No tracks, trying direct timedtext for', vid);
+        const directUrl = 'https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en&fmt=vtt';
+        const text = await fetchViaSW(directUrl);
+        if (text) cues = TypeStreamParser.autoDetect(text);
         if (cues && cues.length > 0) {
           initializeSession();
           return;
@@ -156,70 +156,102 @@
     }
 
     const track = data.bestTrack;
-    const baseUrl = track.baseUrl;
 
-    // baseUrl is relative like "/api/timedtext?key=..." - make it absolute
-    const absoluteBase = baseUrl.startsWith('http') ? baseUrl : 'https://www.youtube.com' + baseUrl;
+    // Strategy: ask background SW for the REAL intercepted timedtext URL
+    // YouTube's own request has all the right params that we can't synthesize
+    let realUrl = null;
+    try {
+      const swResponse = await chrome.runtime.sendMessage({ type: 'GET_SUBTITLE_URL' });
+      realUrl = swResponse && swResponse.url;
+      if (realUrl) {
+        console.log('[TypeStream] Got real timedtext URL from SW (age:', swResponse.age, 'ms)');
+      }
+    } catch (e) {
+      console.log('[TypeStream] No SW URL available:', e.message);
+    }
 
-    // Try fetching directly first (timedtext API allows CORS from youtube.com)
-    let text = await fetchTimedText(absoluteBase + '&fmt=json3');
+    // Fallback to building from baseUrl
+    let fetchUrl = realUrl;
+    if (!fetchUrl && track.baseUrl) {
+      fetchUrl = (track.baseUrl.startsWith('http') ? track.baseUrl : 'https://www.youtube.com' + track.baseUrl) + '&fmt=json3';
+    }
+    if (!fetchUrl) {
+      const vid = data.videoId || getVideoId();
+      if (vid) fetchUrl = 'https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en&fmt=vtt';
+    }
+
+    if (!fetchUrl) {
+      if (panel) panel.showNoCaptions(data.title);
+      return;
+    }
+
+    console.log('[TypeStream] Fetching:', fetchUrl.substring(0, 150));
+
+    // Fetch via background SW (bypasses CORS, has proper context)
+    let text = await fetchViaSW(fetchUrl);
 
     if (text) {
+      // Try parsing as json3 first
       try {
         cues = parseJson3Cues(JSON.parse(text));
       } catch (e) {
-        console.log('[TypeStream] json3 parse failed, trying VTT...', e.message);
-        text = await fetchTimedText(absoluteBase + '&fmt=vtt');
-        if (text) cues = TypeStreamParser.autoDetect(text);
+        // Try VTT
+        cues = TypeStreamParser.autoDetect(text);
       }
-    } else {
-      // Fallback: VTT
-      text = await fetchTimedText(absoluteBase + '&fmt=vtt');
+    }
+
+    // If still no cues, try VTT fallback
+    if ((!cues || cues.length === 0) && fetchUrl.includes('json3')) {
+      const vttUrl = fetchUrl.replace('json3', 'vtt');
+      text = await fetchViaSW(vttUrl);
       if (text) cues = TypeStreamParser.autoDetect(text);
     }
 
-    if (!cues || cues.length === 0) {
-      // Last resort: direct timedtext URL from videoId
+    // Last resort: direct timedtext with videoId
+    if ((!cues || cues.length === 0)) {
       const vid = data.videoId || getVideoId();
       if (vid) {
-        console.log('[TypeStream] Last resort: direct timedtext for', vid);
-        const directVtt = await fetchTimedText('https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en&fmt=vtt');
-        if (directVtt) cues = TypeStreamParser.autoDetect(directVtt);
+        const directUrl = 'https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en&fmt=vtt';
+        text = await fetchViaSW(directUrl);
+        if (text) cues = TypeStreamParser.autoDetect(text);
       }
     }
 
     if (cues && cues.length > 0) {
+      console.log('[TypeStream] Parsed', cues.length, 'cues');
       initializeSession();
     } else {
+      console.log('[TypeStream] No cues after all fetch attempts');
       if (panel) panel.showNoCaptions(data.title);
     }
   }
 
-  /**
-   * Fetches a timedtext URL, trying direct fetch first (timedtext API is CORS-friendly),
-   * then falling back to background service worker.
-   */
-  async function fetchTimedText(url) {
-    console.log('[TypeStream] Fetching:', url.substring(0, 120));
-    // Try direct fetch first
+  async function fetchViaSW(url) {
+    // Try direct fetch from content script (has page cookies, same-origin)
     try {
-      const resp = await fetch(url);
+      const resp = await fetch(url, { credentials: 'include' });
       if (resp.ok) {
         const text = await resp.text();
-        console.log('[TypeStream] Direct fetch OK:', text.length, 'bytes');
-        return text;
+        if (text.length > 0) {
+          console.log('[TypeStream] Direct fetch OK:', text.length, 'bytes');
+          return text;
+        }
+        console.log('[TypeStream] Direct fetch empty body, trying SW...');
+      } else {
+        console.log('[TypeStream] Direct fetch status:', resp.status, 'trying SW...');
       }
-      console.log('[TypeStream] Direct fetch status:', resp.status);
     } catch (e) {
-      console.log('[TypeStream] Direct fetch error:', e.message);
+      console.log('[TypeStream] Direct fetch error:', e.message, 'trying SW...');
     }
-    // Fallback: background SW
+
+    // Fallback: background SW (may not have cookies, but works as last resort)
     try {
       const response = await chrome.runtime.sendMessage({ type: 'FETCH_SUBTITLES', url });
-      if (response && response.success) {
+      if (response && response.success && response.data && response.data.length > 0) {
         console.log('[TypeStream] SW fetch OK:', response.data.length, 'bytes');
         return response.data;
       }
+      console.log('[TypeStream] SW fetch:', response?.success ? '0 bytes' : 'failed');
     } catch (e) {
       console.error('[TypeStream] SW fetch error:', e.message);
     }

@@ -1,9 +1,29 @@
 // TypeStream - Background Service Worker
-// Subtitle fetch proxy (bypass CORS when direct fetch fails).
+// Intercepts YouTube's timedtext API requests to capture the real subtitle URL.
+// Fetches subtitle content for content scripts (bypass CORS).
 
-const VTT_CACHE = new Map();
+let lastSubtitleUrl = null;
+let lastSubtitleFetch = null;
 
+// ---- Intercept YouTube's own timedtext requests ----
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.url.includes('/api/timedtext') && details.url.includes('fmt=')) {
+      lastSubtitleUrl = details.url;
+      lastSubtitleFetch = Date.now();
+      console.log('[TypeStream SW] Captured timedtext URL:', details.url.substring(0, 120));
+    }
+  },
+  { urls: ['*://*.youtube.com/api/timedtext*'], types: ['xmlhttprequest'] }
+);
+
+// ---- Handle messages from content scripts ----
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'GET_SUBTITLE_URL') {
+    sendResponse({ url: lastSubtitleUrl, age: Date.now() - (lastSubtitleFetch || 0) });
+    return true;
+  }
+
   if (message.type === 'FETCH_SUBTITLES') {
     fetchSubtitles(message.url)
       .then(data => sendResponse({ success: true, data }))
@@ -13,15 +33,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function fetchSubtitles(url) {
-  const cacheKey = url;
-  const cached = VTT_CACHE.get(cacheKey);
-  if (cached) return cached;
-
-  const resp = await fetch(url, { headers: { 'Accept': 'text/vtt, application/json, text/xml, */*' } });
+  const resp = await fetch(url, {
+    headers: { 'Accept': 'text/vtt, application/json, text/xml, */*' }
+  });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const text = await resp.text();
-
-  VTT_CACHE.set(cacheKey, text);
-  if (VTT_CACHE.size > 50) VTT_CACHE.delete(VTT_CACHE.keys().next().value);
-  return text;
+  return await resp.text();
 }

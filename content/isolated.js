@@ -158,24 +158,34 @@
     const track = data.bestTrack;
     const baseUrl = track.baseUrl;
 
-    // Fetch subtitle content via background service worker (bypass CORS)
-    let subtitleUrl = baseUrl + '&fmt=json3';
+    // baseUrl is relative like "/api/timedtext?key=..." - make it absolute
+    const absoluteBase = baseUrl.startsWith('http') ? baseUrl : 'https://www.youtube.com' + baseUrl;
 
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'FETCH_SUBTITLES',
-        url: subtitleUrl,
-      });
+    // Try fetching directly first (timedtext API allows CORS from youtube.com)
+    let text = await fetchTimedText(absoluteBase + '&fmt=json3');
 
-      if (response && response.success) {
-        const jsonData = JSON.parse(response.data);
-        cues = parseJson3Cues(jsonData);
-      } else {
-        throw new Error('json3 failed');
+    if (text) {
+      try {
+        cues = parseJson3Cues(JSON.parse(text));
+      } catch (e) {
+        console.log('[TypeStream] json3 parse failed, trying VTT...', e.message);
+        text = await fetchTimedText(absoluteBase + '&fmt=vtt');
+        if (text) cues = TypeStreamParser.autoDetect(text);
       }
-    } catch (e) {
-      // Fallback to VTT
-      await fetchVTT(baseUrl);
+    } else {
+      // Fallback: VTT
+      text = await fetchTimedText(absoluteBase + '&fmt=vtt');
+      if (text) cues = TypeStreamParser.autoDetect(text);
+    }
+
+    if (!cues || cues.length === 0) {
+      // Last resort: direct timedtext URL from videoId
+      const vid = data.videoId || getVideoId();
+      if (vid) {
+        console.log('[TypeStream] Last resort: direct timedtext for', vid);
+        const directVtt = await fetchTimedText('https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en&fmt=vtt');
+        if (directVtt) cues = TypeStreamParser.autoDetect(directVtt);
+      }
     }
 
     if (cues && cues.length > 0) {
@@ -185,21 +195,35 @@
     }
   }
 
-  async function fetchVTT(urlOrBaseUrl) {
-    // If it's a baseUrl (no 'fmt='), append &fmt=vtt
-    const vttUrl = urlOrBaseUrl.includes('fmt=') ? urlOrBaseUrl : urlOrBaseUrl + '&fmt=vtt';
+  /**
+   * Fetches a timedtext URL, trying direct fetch first (timedtext API is CORS-friendly),
+   * then falling back to background service worker.
+   */
+  async function fetchTimedText(url) {
+    console.log('[TypeStream] Fetching:', url.substring(0, 120));
+    // Try direct fetch first
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'FETCH_SUBTITLES',
-        url: vttUrl,
-      });
+      const resp = await fetch(url);
+      if (resp.ok) {
+        const text = await resp.text();
+        console.log('[TypeStream] Direct fetch OK:', text.length, 'bytes');
+        return text;
+      }
+      console.log('[TypeStream] Direct fetch status:', resp.status);
+    } catch (e) {
+      console.log('[TypeStream] Direct fetch error:', e.message);
+    }
+    // Fallback: background SW
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'FETCH_SUBTITLES', url });
       if (response && response.success) {
-        cues = TypeStreamParser.autoDetect(response.data);
+        console.log('[TypeStream] SW fetch OK:', response.data.length, 'bytes');
+        return response.data;
       }
     } catch (e) {
-      console.error('TypeStream: VTT fetch failed', e);
-      cues = [];
+      console.error('[TypeStream] SW fetch error:', e.message);
     }
+    return null;
   }
 
   function parseJson3Cues(json) {

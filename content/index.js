@@ -10,28 +10,31 @@
     window.postMessage({ source: TS_MSG, payload: data }, '*');
   }
 
-  /**
-   * Extracts caption tracks from ytInitialPlayerResponse, trying multiple paths.
-   */
+  function getVideoId() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('v') || '';
+  }
+
+  function getTitle() {
+    return document.title || '';
+  }
+
   function extractCaptions() {
     const yt = window.ytInitialPlayerResponse;
     if (!yt) return null;
 
-    // Path 1: yt.captions.playerCaptionsTracklistRenderer (classic)
-    // Path 2: yt.playerResponse.captions
-    // Path 3: yt.playerResponse.captions.playerCaptionsTracklistRenderer
     let captions = yt.captions;
     if (!captions && yt.playerResponse) {
       captions = yt.playerResponse.captions;
     }
+
     if (!captions) {
-      // Path 4: the response might have caption data nested differently
-      return { tracks: [], videoId: getVideoId(yt), title: getTitle(yt), debug: 'no captions in ytInitialPlayerResponse' };
+      return { tracks: [], videoId: getVideoId(), title: getTitle(), debug: 'null captions' };
     }
 
     const renderer = captions.playerCaptionsTracklistRenderer;
     if (!renderer || !renderer.captionTracks || !renderer.captionTracks.length) {
-      return { tracks: [], videoId: getVideoId(yt), title: getTitle(yt), debug: 'no captionTracks in renderer' };
+      return { tracks: [], videoId: getVideoId(), title: getTitle(), debug: 'empty captionTracks' };
     }
 
     const tracks = renderer.captionTracks.map(t => ({
@@ -43,18 +46,7 @@
       vssId: t.vssId || '',
     }));
 
-    return { tracks, videoId: getVideoId(yt), title: getTitle(yt) };
-  }
-
-  function getVideoId(yt) {
-    // Try yt.videoDetails first, fallback to URL param
-    if (yt && yt.videoDetails && yt.videoDetails.videoId) return yt.videoDetails.videoId;
-    const params = new URLSearchParams(window.location.search);
-    return params.get('v') || '';
-  }
-
-  function getTitle(yt) {
-    return (yt && yt.videoDetails && yt.videoDetails.title) || document.title || '';
+    return { tracks, videoId: getVideoId(), title: getTitle() };
   }
 
   function findBestEnglishTrack(tracks) {
@@ -66,41 +58,33 @@
 
   function sendData() {
     const data = extractCaptions();
-    if (!data) {
-      notifyIsolated({
-        type: 'CAPTIONS_DATA', tracks: [], bestTrack: null,
-        videoId: '', title: '', debug: 'ytInitialPlayerResponse undefined',
-      });
-      return false;
-    }
-    const best = findBestEnglishTrack(data.tracks);
+    const best = data ? findBestEnglishTrack(data.tracks) : null;
     notifyIsolated({
-      type: 'CAPTIONS_DATA', tracks: data.tracks, bestTrack: best,
-      videoId: data.videoId, title: data.title,
-      debug: data.tracks.length === 0
-        ? (data.debug || 'no caption tracks found')
-        : data.tracks.map(t => t.languageCode).join(', '),
+      type: 'CAPTIONS_DATA',
+      tracks: data ? data.tracks : [],
+      bestTrack: best || null,
+      videoId: data ? data.videoId : getVideoId(),
+      title: data ? data.title : getTitle(),
+      debug: data
+        ? (data.tracks.length > 0 ? data.tracks.map(t => t.languageCode).join(',') : (data.debug || 'no tracks'))
+        : 'no ytInitialPlayerResponse',
     });
-    return data.tracks.length > 0;
+    return data && data.tracks.length > 0;
   }
 
   // Respond to ISOLATED world requests
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
-    const msg = event.data;
-    if (!msg || msg.source !== TS_MSG) return;
-    if (msg.type === 'REQUEST_CAPTIONS') sendData();
+    if (!event.data || event.data.source !== TS_MSG) return;
+    if (event.data.type === 'REQUEST_CAPTIONS') sendData();
   });
 
-  // Poll: ytInitialPlayerResponse may not be available immediately at document_start
+  // Poll until ytInitialPlayerResponse is ready
   let attempts = 0;
   function poll() {
-    const success = sendData();
+    sendData();
     attempts++;
-    if (!success && attempts < 60) {
-      // 60 attempts × 500ms = 30 seconds total
-      setTimeout(poll, 500);
-    }
+    if (attempts < 60) setTimeout(poll, 500);
   }
   poll();
 

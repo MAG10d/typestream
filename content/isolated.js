@@ -160,14 +160,23 @@
     // Strategy: ask background SW for the REAL intercepted timedtext URL
     // YouTube's own request has all the right params that we can't synthesize
     let realUrl = null;
-    try {
-      const swResponse = await chrome.runtime.sendMessage({ type: 'GET_SUBTITLE_URL' });
-      realUrl = swResponse && swResponse.url;
-      if (realUrl) {
-        console.log('[TypeStream] Got real timedtext URL from SW (age:', swResponse.age, 'ms)');
+    // Retry up to 3 times with 1.5s delay - YouTube player may not have requested captions yet
+    for (let i = 0; i < 3; i++) {
+      try {
+        const swResponse = await chrome.runtime.sendMessage({ type: 'GET_SUBTITLE_URL' });
+        realUrl = swResponse && swResponse.url;
+        if (realUrl) {
+          console.log('[TypeStream] Got real timedtext URL from SW (age:', swResponse.age, 'ms, attempt:', i+1, ')');
+          break;
+        }
+        if (i < 2) {
+          console.log('[TypeStream] SW has not captured timedtext URL yet, retrying in 1.5s (attempt:', i+1, ')');
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      } catch (e) {
+        console.log('[TypeStream] SW URL error:', e.message, '(attempt:', i+1, ')');
+        if (i < 2) await new Promise(r => setTimeout(r, 1500));
       }
-    } catch (e) {
-      console.log('[TypeStream] No SW URL available:', e.message);
     }
 
     // Fallback to building from baseUrl

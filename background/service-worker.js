@@ -8,13 +8,13 @@ let lastSubtitleFetch = null;
 // ---- Intercept YouTube's own timedtext requests ----
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
-    if (details.url.includes('/api/timedtext') && details.url.includes('fmt=')) {
+    if (details.url.includes('/api/timedtext')) {
       lastSubtitleUrl = details.url;
       lastSubtitleFetch = Date.now();
       console.log('[TypeStream SW] Captured timedtext URL:', details.url.substring(0, 120));
     }
   },
-  { urls: ['*://*.youtube.com/api/timedtext*'], types: ['xmlhttprequest'] }
+  { urls: ['*://*.youtube.com/api/timedtext*'], types: ['xmlhttprequest', 'other'] }
 );
 
 // ---- Handle messages from content scripts ----
@@ -34,6 +34,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function fetchSubtitles(url) {
   const resp = await fetch(url, {
+    credentials: 'include',
     headers: { 'Accept': 'text/vtt, application/json, text/xml, */*' }
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

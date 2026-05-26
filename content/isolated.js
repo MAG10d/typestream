@@ -173,11 +173,36 @@
     // Fallback to building from baseUrl
     let fetchUrl = realUrl;
     if (!fetchUrl && track.baseUrl) {
-      fetchUrl = (track.baseUrl.startsWith('http') ? track.baseUrl : 'https://www.youtube.com' + track.baseUrl) + '&fmt=json3';
+      // Clean the baseUrl: remove 'exp' parameter and set hl to the track's languageCode
+      let url;
+      try {
+        url = new URL(track.baseUrl.startsWith('http') ? track.baseUrl : 'https://www.youtube.com' + track.baseUrl);
+      } catch (e) {
+        // If URL construction fails, fall back to original method
+        url = null;
+      }
+      if (url) {
+        url.searchParams.delete('exp');
+        // Set hl to the track's languageCode to match the caption language
+        url.searchParams.set('hl', track.languageCode);
+        // Add fmt=json3 to match the original behavior (we try json3 first, then vtt fallback)
+        url.searchParams.set('fmt', 'json3');
+        fetchUrl = url.toString();
+      } else {
+        // Fallback to original method if URL construction fails
+        fetchUrl = (track.baseUrl.startsWith('http') ? track.baseUrl : 'https://www.youtube.com' + track.baseUrl) + '&fmt=json3';
+      }
     }
     if (!fetchUrl) {
       const vid = data.videoId || getVideoId();
-      if (vid) fetchUrl = 'https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en&fmt=vtt';
+      if (vid) {
+        // Also clean the fallback URL: set hl to track's languageCode and fmt=json3
+        let url = new URL('https://www.youtube.com/api/timedtext');
+        url.searchParams.set('v', vid);
+        url.searchParams.set('lang', track.languageCode || 'en');
+        url.searchParams.set('fmt', 'json3');
+        fetchUrl = url.toString();
+      }
     }
 
     if (!fetchUrl) {

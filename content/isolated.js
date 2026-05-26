@@ -131,10 +131,24 @@
   }
 
   async function onCaptionsData(data) {
-    if (_captionsResolved) return; // already handled
+    if (_captionsResolved) return; // already handled — also prevents duplicate logs
     _captionsResolved = true;
 
+    console.log('[TypeStream] Captions:',
+      data.tracks?.length + ' tracks, best=' + (data.bestTrack ? 'yes' : 'no'),
+      'videoId=' + data.videoId, data.debug);
+
     if (!data.bestTrack || !data.tracks || data.tracks.length === 0) {
+      // Fallback: try constructing timedtext URL directly from videoId
+      if (data.videoId) {
+        console.log('[TypeStream] Fallback: direct timedtext fetch for', data.videoId);
+        const directUrl = 'https://www.youtube.com/api/timedtext?v=' + data.videoId + '&lang=en';
+        await fetchVTT(directUrl);
+        if (cues && cues.length > 0) {
+          initializeSession();
+          return;
+        }
+      }
       if (panel) panel.showNoCaptions(data.title);
       return;
     }
@@ -169,8 +183,9 @@
     }
   }
 
-  async function fetchVTT(baseUrl) {
-    const vttUrl = baseUrl + '&fmt=vtt';
+  async function fetchVTT(urlOrBaseUrl) {
+    // If it's a baseUrl (no 'fmt='), append &fmt=vtt
+    const vttUrl = urlOrBaseUrl.includes('fmt=') ? urlOrBaseUrl : urlOrBaseUrl + '&fmt=vtt';
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'FETCH_SUBTITLES',

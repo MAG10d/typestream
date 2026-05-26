@@ -99,7 +99,7 @@
     }
 
     _buildShadowDOM() {
-      this.shadowRoot = this.container.attachShadow({ mode: 'closed' });
+      this.shadowRoot = this.container.attachShadow({ mode: 'open' });
 
       // Load Google Fonts inside shadow DOM
       const fontLink = document.createElement('link');

@@ -139,10 +139,12 @@
       'videoId=' + data.videoId, data.debug);
 
     if (!data.bestTrack || !data.tracks || data.tracks.length === 0) {
-      // Fallback: try constructing timedtext URL directly from videoId
-      if (data.videoId) {
-        console.log('[TypeStream] Fallback: direct timedtext fetch for', data.videoId);
-        const directUrl = 'https://www.youtube.com/api/timedtext?v=' + data.videoId + '&lang=en';
+      // Fallback: try constructing timedtext URL directly
+      // Use videoId from MAIN world, or extract from current URL
+      const vid = data.videoId || getVideoId();
+      if (vid) {
+        console.log('[TypeStream] Fallback: direct timedtext fetch for', vid);
+        const directUrl = 'https://www.youtube.com/api/timedtext?v=' + vid + '&lang=en';
         await fetchVTT(directUrl);
         if (cues && cues.length > 0) {
           initializeSession();

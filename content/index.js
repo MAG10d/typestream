@@ -47,11 +47,14 @@
   }
 
   function getVideoId(yt) {
-    return (yt.videoDetails && yt.videoDetails.videoId) || '';
+    // Try yt.videoDetails first, fallback to URL param
+    if (yt && yt.videoDetails && yt.videoDetails.videoId) return yt.videoDetails.videoId;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('v') || '';
   }
 
   function getTitle(yt) {
-    return (yt.videoDetails && yt.videoDetails.title) || '';
+    return (yt && yt.videoDetails && yt.videoDetails.title) || document.title || '';
   }
 
   function findBestEnglishTrack(tracks) {

@@ -38,34 +38,54 @@
      * The panel is placed below the video player in the primary column.
      */
     mount() {
-      // Try to find YouTube's primary column
-      const primaryInner = document.querySelector('#primary-inner');
-      const below = document.querySelector('#below, #player-container');
+      console.log('[TypeStream] Panel.mount() searching for insertion point...');
 
-      if (!primaryInner && !below) {
-        // Fallback: insert after the video player
-        const player = document.querySelector('#movie_player, .html5-video-player, video');
-        if (player) {
-          this.container = document.createElement('div');
-          this.container.id = 'typestream-panel';
-          player.parentElement.insertAdjacentElement('afterend', this.container);
-        } else {
-          return false;
-        }
-      } else {
-        this.container = document.createElement('div');
-        this.container.id = 'typestream-panel';
-        this.container.style.cssText = 'margin-top: 8px;';
+      // Find container: try multiple YouTube layout selectors
+      let mountPoint = null;
 
-        if (below) {
-          below.prepend(this.container);
-        } else if (primaryInner) {
-          primaryInner.prepend(this.container);
+      const selectors = [
+        '#below',
+        '#player-container',
+        '#primary-inner',
+        '#primary',
+        '#columns',
+      ];
+
+      for (const sel of selectors) {
+        const el = document.querySelector(sel);
+        if (el) {
+          console.log('[TypeStream] Found mount point:', sel);
+          mountPoint = el;
+          break;
         }
       }
 
+      if (!mountPoint) {
+        // Last resort: find movie_player and insert after it
+        const moviePlayer = document.querySelector('#movie_player, #player, video');
+        if (moviePlayer) {
+          console.log('[TypeStream] Found video player, inserting after it');
+          this.container = document.createElement('div');
+          this.container.id = 'typestream-panel';
+          this.container.style.cssText = 'margin-top: 8px;';
+          moviePlayer.insertAdjacentElement('afterend', this.container);
+          this._buildShadowDOM();
+          this.visible = true;
+          return true;
+        }
+        console.warn('[TypeStream] No mount point found!');
+        return false;
+      }
+
+      this.container = document.createElement('div');
+      this.container.id = 'typestream-panel';
+      this.container.style.cssText = 'margin-top: 8px;';
+
+      mountPoint.insertBefore(this.container, mountPoint.firstChild);
+
       this._buildShadowDOM();
       this.visible = true;
+      console.log('[TypeStream] Panel mounted successfully');
       return true;
     }
 
@@ -81,15 +101,26 @@
     _buildShadowDOM() {
       this.shadowRoot = this.container.attachShadow({ mode: 'closed' });
 
-      this.shadowRoot.innerHTML = `
-        <style>${global.TypeStreamStyles}</style>
-        <div class="ts-container" id="ts-panel">
-          ${this._headerHTML()}
-          ${this._statsHTML()}
-          <div class="ts-typing-area" id="ts-words"></div>
-          ${this._settingsHTML()}
-        </div>
+      // Load Google Fonts inside shadow DOM
+      const fontLink = document.createElement('link');
+      fontLink.rel = 'stylesheet';
+      fontLink.href = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap';
+      this.shadowRoot.appendChild(fontLink);
+
+      const styleEl = document.createElement('style');
+      styleEl.textContent = global.TypeStreamStyles;
+      this.shadowRoot.appendChild(styleEl);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'ts-container';
+      wrapper.id = 'ts-panel';
+      wrapper.innerHTML = `
+        ${this._headerHTML()}
+        ${this._statsHTML()}
+        <div class="ts-typing-area" id="ts-words"></div>
+        ${this._settingsHTML()}
       `;
+      this.shadowRoot.appendChild(wrapper);
 
       this.el = {
         panel: this.shadowRoot.getElementById('ts-panel'),
@@ -391,7 +422,7 @@
     /**
      * Show "no captions" state.
      */
-    showNoCaptions(videoTitle) {
+    showNoCaptions(videoTitle = '') {
       if (!this.el.wordsEl) return;
 
       this.el.wordsEl.innerHTML = `
@@ -399,7 +430,7 @@
           <div class="ts-empty-icon">📄</div>
           <div class="ts-empty-text">No English Captions Available</div>
           <div class="ts-empty-subtext">
-            ${videoTitle ? '"' + videoTitle + '"' : 'This video'} doesn't have English subtitles
+            ${videoTitle ? '&ldquo;' + videoTitle + '&rdquo; ' : 'This video '}does not have English subtitles
           </div>
         </div>
       `;

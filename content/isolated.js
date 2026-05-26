@@ -1,5 +1,4 @@
 // TypeStream - ISOLATED World Content Script (Orchestrator)
-// Injected at document_idle into ISOLATED world.
 // Coordinates MAIN world communication, subtitle fetching, sync engine,
 // typing engine, UI panel, and SPA navigation handling.
 
@@ -7,10 +6,14 @@
   'use strict';
 
   const TS_MSG = 'TYPESTREAM_MAIN_WORLD';
-  const IS_YT_SHORTS = window.location.pathname.startsWith('/shorts/');
 
-  // Don't run on YouTube Shorts (no standard timedtext captions)
-  if (IS_YT_SHORTS) return;
+  // Don't run on YouTube Shorts or non-video pages
+  if (window.location.pathname.startsWith('/shorts/')) return;
+  if (!window.location.pathname.startsWith('/watch')) {
+    // Still watch for SPA navigation into /watch
+    watchForWatchPage();
+    return;
+  }
 
   // ========== State ==========
   let panel = null;
@@ -18,11 +21,10 @@
   let typingEngine = null;
   let video = null;
   let cues = [];
-  let isInitialized = false;
   let isSessionActive = false;
   let currentVideoId = '';
-  let lastPathname = window.location.pathname;
   let _statsInterval = null;
+  let _captionsResolved = false;
 
   // Settings (defaults)
   let settings = {
@@ -35,26 +37,28 @@
     fontSize: 20,
   };
 
-  // ========== Init ==========
-  function init() {
-    if (isInitialized) return;
-    isInitialized = true;
+  // ========== Boot ==========
+  boot();
 
-    loadSettings();
-    start();
+  function boot() {
+    console.log('[TypeStream] Booting...');
+    loadSettings(() => {
+      console.log('[TypeStream] Settings loaded, mounting panel...');
+      setupPanel();
+      waitForVideo();
+    });
   }
 
-  function loadSettings() {
+  function loadSettings(cb) {
     try {
       chrome.storage.local.get(['typestream_settings'], (result) => {
-        if (result.typestream_settings) {
+        if (result && result.typestream_settings) {
           settings = { ...settings, ...result.typestream_settings };
         }
-        start();
+        cb();
       });
     } catch (e) {
-      // Fallback if chrome.storage not available
-      start();
+      cb();
     }
   }
 
@@ -64,20 +68,25 @@
     } catch (e) { /* ignore */ }
   }
 
-  function start() {
-    // Wait for video element
-    const waitForVideo = () => {
-      video = document.querySelector('video.html5-main-video, video');
-      if (!video) {
-        setTimeout(waitForVideo, 500);
-        return;
-      }
-      currentVideoId = getVideoId();
-      setupPanel();
-      requestSubtitles();
-    };
+  // ========== Video + Subtitle Init ==========
 
-    waitForVideo();
+  function waitForVideo() {
+    let attempts = 0;
+    const tryFind = () => {
+      video = document.querySelector('video.html5-main-video, video');
+      if (video) {
+        currentVideoId = getVideoId();
+        if (currentVideoId) {
+          requestSubtitles();
+          return;
+        }
+      }
+      attempts++;
+      if (attempts < 60) {
+        setTimeout(tryFind, 500);
+      }
+    };
+    tryFind();
   }
 
   function getVideoId() {
@@ -85,81 +94,30 @@
     return params.get('v') || '';
   }
 
-  // ========== SPA Navigation Handling ==========
-  function watchNavigation() {
-    // Listen for yt-navigate-finish (YouTube's custom SPA event)
-    document.addEventListener('yt-navigate-finish', (e) => {
-      const newPathname = window.location.pathname;
+  // ========== MAIN World Communication ==========
 
-      // Only handle /watch pages
-      if (newPathname.startsWith('/shorts/')) return;
-
-      if (newPathname !== lastPathname) {
-        lastPathname = newPathname;
-        handleNavigation();
-      }
-    });
-
-    // Backup: MutationObserver on title (YouTube changes title on navigation)
-    const titleEl = document.querySelector('title');
-    if (titleEl) {
-      const titleObserver = new MutationObserver(() => {
-        const newPathname = window.location.pathname;
-        const newVideoId = getVideoId();
-        if (newVideoId && newVideoId !== currentVideoId) {
-          currentVideoId = newVideoId;
-          handleNavigation();
-        }
-      });
-      titleObserver.observe(titleEl, { childList: true, subtree: true });
-    }
-
-    // Backup: popstate for browser back/forward
-    window.addEventListener('popstate', () => {
-      setTimeout(() => {
-        const newPathname = window.location.pathname;
-        if (newPathname !== lastPathname) {
-          lastPathname = newPathname;
-          handleNavigation();
-        }
-      }, 200);
-    });
-  }
-
-  function handleNavigation() {
-    // Tear down old session
-    teardown();
-
-    const newVideoId = getVideoId();
-    if (!newVideoId) {
-      // Not a /watch page, don't re-initialize
-      return;
-    }
-
-    currentVideoId = newVideoId;
-
-    // Wait for new video element
-    let retries = 0;
-    const waitForNewVideo = () => {
-      video = document.querySelector('video.html5-main-video, video');
-      if (video && video.readyState >= 0) {
-        setupPanel();
-        requestSubtitles();
-      } else if (retries < 20) {
-        retries++;
-        setTimeout(waitForNewVideo, 500);
-      }
-    };
-    waitForNewVideo();
-  }
-
-  // ========== Subtitle Fetching ==========
   function requestSubtitles() {
-    // Request caption data from MAIN world
+    _captionsResolved = false;
+    // Main world script polls ytInitialPlayerResponse and pushes data
+    window.addEventListener('message', handleMainWorldMessage);
+
+    // Also actively request (in case main world script hasn't auto-detected)
     window.postMessage({ source: TS_MSG, type: 'REQUEST_CAPTIONS' }, '*');
 
-    // Also listen for proactive MAIN world messages
-    window.addEventListener('message', handleMainWorldMessage);
+    // Retry a few times in case ytInitialPlayerResponse isn't ready yet
+    let retries = 0;
+    const retry = () => {
+      if (_captionsResolved) return;
+      retries++;
+      if (retries < 10) {
+        window.postMessage({ source: TS_MSG, type: 'REQUEST_CAPTIONS' }, '*');
+        setTimeout(retry, 800);
+      } else {
+        // Give up: show no captions
+        if (panel) panel.showNoCaptions();
+      }
+    };
+    setTimeout(retry, 800);
   }
 
   function handleMainWorldMessage(event) {
@@ -173,7 +131,10 @@
   }
 
   async function onCaptionsData(data) {
-    if (!data.bestTrack) {
+    if (_captionsResolved) return; // already handled
+    _captionsResolved = true;
+
+    if (!data.bestTrack || !data.tracks || data.tracks.length === 0) {
       if (panel) panel.showNoCaptions(data.title);
       return;
     }
@@ -182,7 +143,6 @@
     const baseUrl = track.baseUrl;
 
     // Fetch subtitle content via background service worker (bypass CORS)
-    // First try with JSON format (easier to parse)
     let subtitleUrl = baseUrl + '&fmt=json3';
 
     try {
@@ -191,16 +151,11 @@
         url: subtitleUrl,
       });
 
-      if (response.success) {
+      if (response && response.success) {
         const jsonData = JSON.parse(response.data);
         cues = parseJson3Cues(jsonData);
-
-        if (!cues || cues.length === 0) {
-          // Fallback: try VTT format
-          await fetchVTT(baseUrl);
-        }
       } else {
-        await fetchVTT(baseUrl);
+        throw new Error('json3 failed');
       }
     } catch (e) {
       // Fallback to VTT
@@ -216,18 +171,16 @@
 
   async function fetchVTT(baseUrl) {
     const vttUrl = baseUrl + '&fmt=vtt';
-
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'FETCH_SUBTITLES',
         url: vttUrl,
       });
-
-      if (response.success) {
+      if (response && response.success) {
         cues = TypeStreamParser.autoDetect(response.data);
       }
     } catch (e) {
-      console.error('TypeStream: Failed to fetch subtitles', e);
+      console.error('TypeStream: VTT fetch failed', e);
       cues = [];
     }
   }
@@ -235,7 +188,6 @@
   function parseJson3Cues(json) {
     const results = [];
     if (!json.events || !Array.isArray(json.events)) return results;
-
     for (const evt of json.events) {
       if (evt.segs) {
         const startMs = evt.tStartMs || 0;
@@ -254,20 +206,20 @@
   }
 
   function cleanJson3Text(text) {
-    return text
-      .replace(/\n/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
-  // ========== Session Management ==========
+  // ========== Session ==========
+
   function initializeSession() {
-    if (panel) panel.unmount();
+    if (!panel || !video || !cues.length) return;
+
+    // Rebuild panel clean (close old shadow dom, rebuild)
+    if (panel.container) {
+      panel.unmount();
+    }
     setupPanel();
 
-    if (!video || !cues.length) return;
-
-    // Create sync engine
     syncEngine = new TypeStreamSyncEngine({
       lagThreshold: settings.lagThreshold,
       autoPauseEnabled: settings.autoPause,
@@ -275,188 +227,137 @@
       flowTimeout: settings.flowTimeout,
     });
 
-    // Create typing engine
     typingEngine = new TypeStreamTypingEngine({
       ignorePunctuation: settings.ignorePunctuation,
       ignoreCase: settings.ignoreCase,
     });
 
-    // Wire callbacks
+    // Wire sync -> typing
     syncEngine.on('wordsReady', (data) => {
-      if (data.words && data.words.length > 0) {
-        const currentWord = syncEngine.getCurrentWord();
-        typingEngine.setWord(currentWord);
-        typingEngine.isActive = true;
-        renderWords(data.words);
-      }
-    });
-
-    syncEngine.on('cueChange', (data) => {
-      // Cue changed - reset typing for new words
       if (data.words.length > 0) {
         typingEngine.setWord(syncEngine.getCurrentWord());
-        renderWords(data.words);
+        typingEngine.isActive = true;
       }
+      renderAll();
     });
 
-    syncEngine.on('autoPause', () => {
-      updatePausedState(true);
+    syncEngine.on('cueChange', () => {
+      typingEngine.setWord(syncEngine.getCurrentWord());
+      renderAll();
     });
 
-    syncEngine.on('autoResume', () => {
-      updatePausedState(false);
+    syncEngine.on('wordAdvance', () => {
+      typingEngine.setWord(syncEngine.getCurrentWord());
+      renderAll();
     });
 
-    syncEngine.on('wordAdvance', (data) => {
-      // Word was advanced - typing engine handles display
-      const currentWord = syncEngine.getCurrentWord();
-      if (currentWord) {
-        typingEngine.setWord(currentWord);
-      }
-      const words = syncEngine.getDisplayWords();
-      renderWords(words);
-    });
+    syncEngine.on('autoPause', () => renderAll());
+    syncEngine.on('autoResume', () => renderAll());
 
-    typingEngine.on('wordUpdate', (data) => {
-      const words = syncEngine.getDisplayWords();
-      const currentIdx = syncEngine.getCurrentWordDisplayIndex();
-      const charDiff = typingEngine.getCharDiff();
-      const isPaused = syncEngine.isPausedByUs;
-
-      if (panel) {
-        panel.render(words, syncEngine.currentWordIndex, {
-          charDiff,
-          isPaused,
-        });
-      }
-    });
-
-    typingEngine.on('wordComplete', (data) => {
+    typingEngine.on('wordUpdate', () => renderAll());
+    typingEngine.on('wordComplete', () => {
       syncEngine.advanceWord();
-      updateStats();
-      const words = syncEngine.getDisplayWords();
-      if (words.length > 0) renderWords(words);
+      renderAll();
     });
+    typingEngine.on('focusChange', () => {});
 
-    typingEngine.on('focusChange', (data) => {
-      // Visual indication handled by panel
-    });
-
-    // Attach engines
     syncEngine.attach(video, cues);
     typingEngine.attach(panel.container);
     typingEngine.startSession();
     typingEngine.focus();
-
     isSessionActive = true;
 
-    // Start stats update interval
+    // Stats poll
     if (_statsInterval) clearInterval(_statsInterval);
     _statsInterval = setInterval(updateStats, 250);
-
     updateStats();
-
-    // Initial render
-    const words = syncEngine.getDisplayWords();
-    if (words.length > 0) {
-      renderWords(words);
-    }
+    renderAll();
   }
 
-  function renderWords(words) {
-    if (!panel) return;
-    const currentIdx = syncEngine.currentWordIndex;
-    const charDiff = typingEngine.getCharDiff();
-    const isPaused = syncEngine ? syncEngine.isPausedByUs : false;
-    panel.render(words, currentIdx, { charDiff, isPaused });
-  }
-
-  function updatePausedState(paused) {
-    if (!panel) return;
+  function renderAll() {
+    if (!panel || !syncEngine || !typingEngine) return;
     const words = syncEngine.getDisplayWords();
-    const currentIdx = syncEngine.currentWordIndex;
     const charDiff = typingEngine.getCharDiff();
-    panel.render(words, currentIdx, { charDiff, isPaused: paused });
+    const isPaused = syncEngine.isPausedByUs;
+    panel.render(words, syncEngine.currentWordIndex, { charDiff, isPaused });
   }
 
   function updateStats() {
     if (!panel || !typingEngine) return;
-    const stats = typingEngine.getStats();
-    panel.updateStats(stats);
+    panel.updateStats(typingEngine.getStats());
   }
 
-  // ========== Panel Setup ==========
+  // ========== Panel ==========
+
   function setupPanel() {
     if (panel) return;
-
     panel = new TypeStreamPanel();
-    const mounted = panel.mount();
-
-    if (!mounted) {
-      // Retry after a short delay
-      setTimeout(() => {
-        panel = new TypeStreamPanel();
-        panel.mount();
-      }, 1000);
+    const ok = panel.mount();
+    if (!ok) {
+      panel = null;
+      // Retry later
+      setTimeout(setupPanel, 1000);
       return;
     }
-
-    panel.on('close', () => {
-      teardown();
-    });
-
+    panel.on('close', () => teardown());
     panel.on('settingChange', (data) => {
-      handleSettingChange(data.key, data.value);
+      settings[data.key] = data.value;
+      saveSettings();
+      if (syncEngine) syncEngine.setOptions(settings);
+      if (typingEngine) typingEngine.setOptions(settings);
     });
+  }
 
-    // Clicking the panel focuses the typing engine
-    if (panel.container) {
-      panel.container.addEventListener('click', () => {
-        if (typingEngine) {
-          typingEngine.focus();
-        }
-      });
+  // ========== SPA Navigation ==========
+
+  function watchForWatchPage() {
+    document.addEventListener('yt-navigate-finish', () => {
+      if (window.location.pathname.startsWith('/watch')) {
+        // We're now on a watch page — full init
+        window.location.reload();
+      }
+    });
+  }
+
+  // SPA navigation within /watch pages
+  document.addEventListener('yt-navigate-finish', () => {
+    const newId = getVideoId();
+    if (newId && newId !== currentVideoId) {
+      teardown();
+      currentVideoId = newId;
+      _captionsResolved = false;
+      setupPanel();
+      waitForVideo();
     }
-  }
+  });
 
-  function handleSettingChange(key, value) {
-    settings[key] = value;
-    saveSettings();
-
-    if (syncEngine) syncEngine.setOptions(settings);
-    if (typingEngine) typingEngine.setOptions(settings);
-  }
+  // popstate backup
+  window.addEventListener('popstate', () => {
+    setTimeout(() => {
+      const newId = getVideoId();
+      if (newId && newId !== currentVideoId) {
+        teardown();
+        currentVideoId = newId;
+        _captionsResolved = false;
+        setupPanel();
+        waitForVideo();
+      }
+    }, 500);
+  });
 
   // ========== Teardown ==========
+
   function teardown() {
-    if (syncEngine) {
-      syncEngine.detach();
-      syncEngine = null;
-    }
-    if (typingEngine) {
-      typingEngine.detach();
-      typingEngine = null;
-    }
-    if (panel) {
-      panel.unmount();
-      panel = null;
-    }
-    if (_statsInterval) {
-      clearInterval(_statsInterval);
-      _statsInterval = null;
-    }
+    if (syncEngine) { syncEngine.detach(); syncEngine = null; }
+    if (typingEngine) { typingEngine.detach(); typingEngine = null; }
+    if (panel) { panel.unmount(); panel = null; }
+    if (_statsInterval) { clearInterval(_statsInterval); _statsInterval = null; }
     cues = [];
     isSessionActive = false;
   }
 
-  // ========== Boot ==========
-  init();
-  watchNavigation();
+  // ========== Popup Messages ==========
 
-  // Listen for MAIN world messages
-  window.addEventListener('message', handleMainWorldMessage);
-
-  // Listen for popup messages
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'GET_STATUS') {
       sendResponse({ active: isSessionActive });
@@ -467,7 +368,9 @@
         teardown();
         sendResponse({ active: false });
       } else {
-        start();
+        _captionsResolved = false;
+        setupPanel();
+        waitForVideo();
         sendResponse({ active: true });
       }
       return true;

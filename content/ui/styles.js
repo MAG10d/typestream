@@ -5,8 +5,6 @@
   'use strict';
 
   global.TypeStreamStyles = `
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
     :host {
       all: initial;
     }
@@ -18,7 +16,7 @@
     }
 
     .ts-container {
-      font-family: 'JetBrains Mono', 'Roboto Mono', 'Cascadia Code', monospace;
+      font-family: 'JetBrains Mono', 'Roboto Mono', 'Cascadia Code', 'Consolas', 'Monaco', monospace;
       background: #1a1a1a;
       border-radius: 8px;
       padding: 16px 20px;

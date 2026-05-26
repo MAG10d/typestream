@@ -38,63 +38,45 @@
      * The panel is placed below the video player in the primary column.
      */
     mount() {
-      console.log('[TypeStream] Panel.mount() searching for insertion point...');
-
-      // Find container: try multiple YouTube layout selectors
-      let mountPoint = null;
-
-      const selectors = [
-        '#below',
-        '#player-container',
-        '#primary-inner',
-        '#primary',
-        '#columns',
-      ];
-
-      for (const sel of selectors) {
-        const el = document.querySelector(sel);
-        if (el) {
-          console.log('[TypeStream] Found mount point:', sel);
-          mountPoint = el;
-          break;
-        }
+      if (document.getElementById('typestream-panel')) {
+        // Already mounted
+        this.container = document.getElementById('typestream-panel');
+        this.shadowRoot = this.container.shadowRoot;
+        this.visible = true;
+        this._cacheShadowElements();
+        return true;
       }
 
-      if (!mountPoint) {
-        // Last resort: find movie_player and insert after it
-        const moviePlayer = document.querySelector('#movie_player, #player, video');
-        if (moviePlayer) {
-          console.log('[TypeStream] Found video player, inserting after it');
-          this.container = document.createElement('div');
-          this.container.id = 'typestream-panel';
-          this.container.style.cssText = 'margin-top: 8px;';
-          moviePlayer.insertAdjacentElement('afterend', this.container);
-          this._buildShadowDOM();
-          this.visible = true;
-          return true;
-        }
-        console.warn('[TypeStream] No mount point found!');
-        return false;
-      }
+      console.log('[TypeStream] Panel.mount() creating fixed overlay...');
 
+      // Fixed-position floating panel anchored to body — avoids all YouTube layout issues
       this.container = document.createElement('div');
       this.container.id = 'typestream-panel';
-      this.container.style.cssText = 'margin-top: 8px;';
+      this.container.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 99999;
+        width: 600px;
+        max-width: calc(100vw - 40px);
+        transition: opacity 0.2s;
+      `;
 
-      mountPoint.insertBefore(this.container, mountPoint.firstChild);
+      document.body.appendChild(this.container);
 
       this._buildShadowDOM();
       this.visible = true;
-      console.log('[TypeStream] Panel mounted successfully');
+      console.log('[TypeStream] Panel mounted successfully (fixed overlay)');
       return true;
     }
 
     unmount() {
-      if (this.container && this.container.parentElement) {
-        this.container.parentElement.removeChild(this.container);
+      if (this.container) {
+        this.container.remove();
       }
       this.container = null;
       this.shadowRoot = null;
+      this.el = {};
       this.visible = false;
     }
 
@@ -122,6 +104,12 @@
       `;
       this.shadowRoot.appendChild(wrapper);
 
+      this._cacheShadowElements();
+      this._bindEvents();
+    }
+
+    _cacheShadowElements() {
+      if (!this.shadowRoot) return;
       this.el = {
         panel: this.shadowRoot.getElementById('ts-panel'),
         header: this.shadowRoot.querySelector('.ts-header'),
@@ -142,8 +130,6 @@
         flowTimeout: this.shadowRoot.getElementById('ts-flow-timeout'),
         flowValue: this.shadowRoot.getElementById('ts-flow-value'),
       };
-
-      this._bindEvents();
     }
 
     _headerHTML() {
@@ -294,33 +280,30 @@
         this._updateFontSize(val);
       });
 
-      // Dragging (title bar)
+      // Dragging (title bar) — move the outer fixed container
       const header = this.el.header;
       let isDragging = false;
-      let startX, startY, startLeft, startTop;
+      let startX, startY, startRight, startBottom;
 
       header.addEventListener('mousedown', (e) => {
         if (e.target.tagName === 'BUTTON') return;
         isDragging = true;
         startX = e.clientX;
         startY = e.clientY;
-        const rect = this.el.panel.getBoundingClientRect();
-        startLeft = rect.left;
-        startTop = rect.top;
-
-        this.el.panel.style.position = 'fixed';
-        this.el.panel.style.left = startLeft + 'px';
-        this.el.panel.style.top = startTop + 'px';
-        this.el.panel.style.zIndex = '9999';
+        const containerRect = this.container.getBoundingClientRect();
+        startRight = window.innerWidth - containerRect.right;
+        startBottom = window.innerHeight - containerRect.bottom;
         this.el.panel.style.cursor = 'grabbing';
       });
 
       document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-        this.el.panel.style.left = (startLeft + dx) + 'px';
-        this.el.panel.style.top = (startTop + dy) + 'px';
+        const dx = startX - e.clientX;
+        const dy = startY - e.clientY;
+        this.container.style.right = (startRight + dx) + 'px';
+        this.container.style.bottom = (startBottom + dy) + 'px';
+        this.container.style.left = 'auto';
+        this.container.style.top = 'auto';
       });
 
       document.addEventListener('mouseup', () => {

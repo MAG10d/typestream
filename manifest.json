@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "TypeStream",
+  "version": "1.0.0",
+  "description": "Practice touch-typing with real-time YouTube subtitles. Type along with any video!",
+  "author": "TypeStream",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["content/index.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": [
+        "content/subtitleParser.js",
+        "content/syncEngine.js",
+        "content/typingEngine.js",
+        "content/ui/styles.js",
+        "content/ui/panel.js",
+        "content/isolated.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "TypeStream",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["*://*.youtube.com/*"]
+    }
+  ]
+}

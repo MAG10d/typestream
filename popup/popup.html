@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TypeStream</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 280px;
+      font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
+      background: #1a1a1a;
+      color: #d1d0ce;
+      padding: 16px;
+    }
+
+    .ts-popup-header {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    .ts-popup-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #e2b714;
+      letter-spacing: 1px;
+    }
+
+    .ts-popup-version {
+      font-size: 10px;
+      color: #646669;
+      margin-top: 2px;
+    }
+
+    .ts-popup-section {
+      margin-bottom: 14px;
+    }
+
+    .ts-popup-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #646669;
+      margin-bottom: 6px;
+    }
+
+    .ts-popup-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      padding: 8px 12px;
+      background: #252525;
+      border-radius: 6px;
+    }
+
+    .ts-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #646669;
+      flex-shrink: 0;
+    }
+
+    .ts-dot.active {
+      background: #4caf50;
+      box-shadow: 0 0 6px rgba(76, 175, 80, 0.5);
+    }
+
+    .ts-dot.error {
+      background: #ca4754;
+      box-shadow: 0 0 6px rgba(202, 71, 84, 0.5);
+    }
+
+    .ts-popup-btn {
+      display: block;
+      width: 100%;
+      padding: 10px 16px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      margin-bottom: 8px;
+    }
+
+    .ts-popup-btn:hover {
+      opacity: 0.85;
+    }
+
+    .ts-popup-btn.primary {
+      background: #e2b714;
+      color: #1a1a1a;
+    }
+
+    .ts-popup-btn.secondary {
+      background: #333;
+      color: #d1d0ce;
+    }
+
+    .ts-popup-divider {
+      height: 1px;
+      background: #2a2a2a;
+      margin: 12px 0;
+    }
+
+    .ts-popup-footer {
+      text-align: center;
+      font-size: 9px;
+      color: #555;
+      margin-top: 8px;
+    }
+
+    .ts-popup-small {
+      font-size: 10px;
+      color: #646669;
+      margin-top: 4px;
+    }
+
+    .ts-popup-link {
+      color: #e2b714;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="ts-popup-header">
+    <div class="ts-popup-title">⌨ TypeStream</div>
+    <div class="ts-popup-version">v1.0.0</div>
+  </div>
+
+  <div class="ts-popup-section">
+    <div class="ts-popup-label">Status</div>
+    <div class="ts-popup-status">
+      <span class="ts-dot" id="ts-status-dot"></span>
+      <span id="ts-status-text">Not on YouTube</span>
+    </div>
+  </div>
+
+  <div class="ts-popup-section">
+    <button class="ts-popup-btn primary" id="ts-goto-yt">
+      🎬 Open a YouTube Video
+    </button>
+    <button class="ts-popup-btn secondary" id="ts-toggle-overlay">
+      <span id="ts-toggle-text">Hide Typing Panel</span>
+    </button>
+  </div>
+
+  <div class="ts-popup-divider"></div>
+
+  <div class="ts-popup-section">
+    <div class="ts-popup-label">How to use</div>
+    <div class="ts-popup-small">
+      1. Open a YouTube video with English captions<br>
+      2. Click the TypeStream panel to focus<br>
+      3. Start typing along with the subtitles!<br>
+      4. Press <strong>Esc</strong> to unfocus
+    </div>
+  </div>
+
+  <div class="ts-popup-footer">
+    <a class="ts-popup-link" href="#" id="ts-report-bug">Report a Bug</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
